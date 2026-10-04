@@ -1,0 +1,117 @@
+[project]
+name = "vehicle-rental-backend"
+version = "0.1.0"
+description = "Vehicle rental platform API — FastAPI, RBAC, rental rules, MinIO proofs"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlalchemy>=2.0.35",
+    "alembic>=1.13.0",
+    "psycopg2-binary>=2.9.9",
+    "pydantic[email]>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "python-jose[cryptography]>=3.3.0",
+    "python-multipart>=0.0.9",
+    "minio>=7.2.7",
+    "bcrypt>=4.1",
+]
+
+[project.scripts]
+seed = "app.seed:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.27.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+    "types-passlib>=1.7.7.20241221",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# ---------------------------------------------------------------------------
+# uv / python resolution
+# ---------------------------------------------------------------------------
+[tool.uv]
+package = true
+
+# ---------------------------------------------------------------------------
+# ruff — linter + formatter (sole owner of both, per SPEC 13.3)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",    # line length handled by formatter
+    "B008",    # FastAPI Depends() in defaults is idiomatic
+    "RUF012",  # SQLAlchemy declarative attrs read as ClassVar
+    "RUF001",  # typographic dashes/quotes are intentional in docstrings
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/env.py" = ["E402"]
+"alembic/versions/*" = ["E402", "I001"]
+"tests/*" = ["S101"]
+
+# ---------------------------------------------------------------------------
+# mypy — types (SPEC 13.3)
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+files = ["app"]
+strict = true
+warn_unreachable = true
+show_error_codes = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# Bare names are required alongside the dotted patterns: `jose.*` does not match
+# the top-level `jose` package itself.
+module = ["minio", "minio.*", "jose", "jose.*", "bcrypt", "bcrypt.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+# ---------------------------------------------------------------------------
+# pytest (SPEC 10)
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers --strict-config"
+asyncio_mode = "auto"
+filterwarnings = [
+    # Our own deprecations are errors; upstream library notices are not.
+    "error::DeprecationWarning:app.*",
+    "ignore:'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated:Warning",
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:Warning",
+]
