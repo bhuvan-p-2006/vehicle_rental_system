@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from fastapi.testclient import TestClient
+
 
 def _iso(days: int) -> str:
     return (date.today() + timedelta(days=days)).isoformat()
@@ -222,10 +224,10 @@ def test_pending_queue_returns_only_pending_requests(
         rental_payload(str(vehicle.id), start_date=_iso(20), end_date=_iso(24)),
     )
 
-    assert client.get("/api/v1/rentals/pending").status_code == 401
-    assert client.get("/api/v1/rentals/pending", headers=a["headers"]).status_code == 403
+    assert client.get("/api/v1/rentals").status_code == 401
+    assert client.get("/api/v1/rentals", headers=a["headers"]).status_code == 403
 
-    queue = client.get("/api/v1/rentals/pending", headers=staff["headers"])
+    queue = client.get("/api/v1/rentals", headers=staff["headers"])
     assert queue.status_code == 200
     assert queue.json()["total"] == 1
     assert queue.json()["items"][0]["id"] == rental["id"]
@@ -233,7 +235,7 @@ def test_pending_queue_returns_only_pending_requests(
     client.post(
         f"/api/v1/rentals/{rental['id']}/reject", json={"reason": "no"}, headers=staff["headers"]
     )
-    assert client.get("/api/v1/rentals/pending", headers=staff["headers"]).json()["total"] == 0
+    assert client.get("/api/v1/rentals", headers=staff["headers"]).json()["total"] == 0
 
 
 def test_pending_queue_is_ordered_by_requested_start_date(
@@ -258,8 +260,150 @@ def test_pending_queue_is_ordered_by_requested_start_date(
         rental_payload(str(early_vehicle.id), start_date=_iso(20), end_date=_iso(24)),
     )
 
-    items = client.get("/api/v1/rentals/pending", headers=staff["headers"]).json()["items"]
+    items = client.get("/api/v1/rentals", headers=staff["headers"]).json()["items"]
     assert [i["vehicle_id"] for i in items] == [str(early_vehicle.id), str(late_vehicle.id)]
+
+
+def test_staff_queue_can_reach_every_lifecycle_bucket(
+    client, auth, rental_payload, make_vehicle
+) -> None:
+    """Regression guard.
+
+    The queue used to return only `pending`. Once a request was approved it left
+    the queue, so staff could never see it again to activate or complete it, and
+    the customer stayed blocked by R1 forever. Every bucket must be listable.
+    """
+    customer = auth["register_customer"]()
+    staff = auth["login_staff"]()
+    vehicle = make_vehicle()
+    rid = _submit(
+        client,
+        customer["headers"],
+        rental_payload(str(vehicle.id), start_date=_iso(20), end_date=_iso(24)),
+    )["id"]
+
+    def count(status: str) -> int:
+        r = client.get("/api/v1/rentals", params={"status": status}, headers=staff["headers"])
+        assert r.status_code == 200
+        return r.json()["total"]
+
+    assert count("pending") == 1
+    assert count("approved") == 0
+
+    client.post(f"/api/v1/rentals/{rid}/approve", headers=staff["headers"])
+    assert count("pending") == 0
+    assert count("approved") == 1
+
+    client.post(f"/api/v1/rentals/{rid}/activate", headers=staff["headers"])
+    assert count("approved") == 0
+    assert count("active") == 1
+
+    client.post(f"/api/v1/rentals/{rid}/complete", headers=staff["headers"])
+    assert count("active") == 0
+    assert count("completed") == 1
+
+
+def test_staff_queue_rejects_unknown_status(client: TestClient, auth) -> None:
+    staff = auth["login_staff"]()
+    r = client.get("/api/v1/rentals", params={"status": "teleported"}, headers=staff["headers"])
+    assert r.status_code == 422
+
+
+def test_queue_defaults_to_pending(client, auth, rental_payload, make_vehicle) -> None:
+    customer = auth["register_customer"]()
+    staff = auth["login_staff"]()
+    vehicle = make_vehicle()
+    _submit(
+        client,
+        customer["headers"],
+        rental_payload(str(vehicle.id), start_date=_iso(20), end_date=_iso(24)),
+    )
+    assert client.get("/api/v1/rentals", headers=staff["headers"]).json()["total"] == 1
+
+
+def test_staff_can_cancel_an_approved_rental(client, auth, rental_payload, make_vehicle) -> None:
+    """A committed booking must be releasable when the customer drops out."""
+    customer = auth["register_customer"]()
+    staff = auth["login_staff"]()
+    vehicle = make_vehicle()
+    rid = _submit(
+        client,
+        customer["headers"],
+        rental_payload(str(vehicle.id), start_date=_iso(20), end_date=_iso(24)),
+    )["id"]
+    client.post(f"/api/v1/rentals/{rid}/approve", headers=staff["headers"])
+
+    cancelled = client.post(
+        f"/api/v1/rentals/{rid}/cancel",
+        json={"reason": "Customer withdrew"},
+        headers=staff["headers"],
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+
+    # The customer is released by R1 and the vehicle's calendar is free again.
+    again = client.post(
+        "/api/v1/rentals",
+        json=rental_payload(str(vehicle.id), start_date=_iso(20), end_date=_iso(24)),
+        headers=customer["headers"],
+    )
+    assert again.status_code == 201
+
+
+def test_staff_can_cancel_an_active_rental(client, auth, rental_payload, make_vehicle) -> None:
+    customer = auth["register_customer"]()
+    staff = auth["login_staff"]()
+    vehicle = make_vehicle()
+    rid = _submit(
+        client,
+        customer["headers"],
+        rental_payload(str(vehicle.id), start_date=_iso(20), end_date=_iso(24)),
+    )["id"]
+    client.post(f"/api/v1/rentals/{rid}/approve", headers=staff["headers"])
+    client.post(f"/api/v1/rentals/{rid}/activate", headers=staff["headers"])
+
+    r = client.post(f"/api/v1/rentals/{rid}/cancel", headers=staff["headers"])
+    assert r.status_code == 200
+    assert r.json()["status"] == "cancelled"
+
+
+def test_staff_cannot_cancel_a_completed_rental(client, auth, rental_payload, make_vehicle) -> None:
+    """Terminal states stay immutable."""
+    customer = auth["register_customer"]()
+    staff = auth["login_staff"]()
+    vehicle = make_vehicle()
+    rid = _submit(
+        client,
+        customer["headers"],
+        rental_payload(str(vehicle.id), start_date=_iso(20), end_date=_iso(24)),
+    )["id"]
+    for action in ("approve", "activate", "complete"):
+        client.post(f"/api/v1/rentals/{rid}/{action}", headers=staff["headers"])
+
+    r = client.post(f"/api/v1/rentals/{rid}/cancel", headers=staff["headers"])
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "INVALID_TRANSITION"
+
+
+def test_staff_cancellation_is_audited(client, auth, rental_payload, make_vehicle) -> None:
+    customer = auth["register_customer"]()
+    staff = auth["login_staff"]()
+    vehicle = make_vehicle()
+    rid = _submit(
+        client,
+        customer["headers"],
+        rental_payload(str(vehicle.id), start_date=_iso(20), end_date=_iso(24)),
+    )["id"]
+    client.post(
+        f"/api/v1/rentals/{rid}/cancel", json={"reason": "duplicate"}, headers=staff["headers"]
+    )
+
+    events = client.get(f"/api/v1/rentals/{rid}", headers=staff["headers"]).json()["audit_events"]
+    last = events[-1]
+    assert last["action"] == "cancelled"
+    assert last["from_status"] == "pending"
+    assert last["to_status"] == "cancelled"
+    assert last["reason"] == "duplicate"
 
 
 def test_proof_urls_are_presigned_and_scoped(client, auth, rental_payload) -> None:
