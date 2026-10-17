@@ -1,5 +1,10 @@
 """enforce R1 via partial unique index; add proof/audit constraints
 
+The `submitted` audit action lives in 001 rather than being added here: introducing
+it would force a downgrade to rebuild the enum, which cannot cast rows that already
+carry the value. Keeping it in the initial schema keeps the migration reversible
+against a database that contains data.
+
 Replaces the original UNIQUE (customer_id, status) constraint, which was wrong:
 it would forbid a customer from ever holding two rejected/completed rows, while
 still permitting two pending ones. The partial unique index scoped to the
@@ -45,9 +50,6 @@ def upgrade() -> None:
     op.create_index("ix_rentals_vehicle_window", "rental_requests", ["vehicle_id", "start_date", "end_date"])
     op.create_index("ix_rentals_status", "rental_requests", ["status"])
 
-    # 5. Audit trail gains a `submitted` action (SPEC §3.5 lifecycle completeness).
-    op.execute("ALTER TYPE audit_action ADD VALUE IF NOT EXISTS 'submitted'")
-
     # 6. Cascade proof/audit deletes with their request.
     op.drop_constraint("proof_documents_request_id_fkey", "proof_documents", type_="foreignkey")
     op.create_foreign_key(
@@ -86,16 +88,6 @@ def downgrade() -> None:
     op.drop_index("ix_rentals_vehicle_window", table_name="rental_requests")
     op.drop_constraint("uq_proof_one_per_kind_per_request", "proof_documents", type_="unique")
     op.drop_index("uq_rentals_one_outstanding_per_customer", table_name="rental_requests")
-
-    # PostgreSQL cannot remove a value from an enum in place. Recreate the type
-    # without 'submitted', repoint the column, then swap the names.
-    op.execute("CREATE TYPE audit_action_v1 AS ENUM ('approved', 'rejected', 'activated', 'completed', 'cancelled')")
-    op.execute(
-        "ALTER TABLE audit_events ALTER COLUMN action TYPE audit_action_v1 "
-        "USING (action::text::audit_action_v1)"
-    )
-    op.execute("DROP TYPE audit_action")
-    op.execute("ALTER TYPE audit_action_v1 RENAME TO audit_action")
 
     op.create_unique_constraint(
         "uq_one_outstanding_per_customer", "rental_requests", ["customer_id", "status"]

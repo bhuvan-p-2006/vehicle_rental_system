@@ -76,7 +76,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), primary_key=True),
         sa.Column("request_id", sa.Uuid(), sa.ForeignKey("rental_requests.id"), nullable=False),
         sa.Column("actor_id", sa.Uuid(), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("action", sa.Enum("approved", "rejected", "activated", "completed", "cancelled", name="audit_action"), nullable=False),
+        sa.Column("action", sa.Enum("submitted", "approved", "rejected", "activated", "completed", "cancelled", name="audit_action"), nullable=False),
         sa.Column("from_status", sa.String(50), nullable=False),
         sa.Column("to_status", sa.String(50), nullable=False),
         sa.Column("reason", sa.String(1000), nullable=True),
