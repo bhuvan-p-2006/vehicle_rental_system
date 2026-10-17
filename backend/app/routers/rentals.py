@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_session
@@ -17,6 +17,7 @@ from app.schemas.rental import (
     RentalDetailOut,
     RentalListOut,
     RentalOut,
+    StaffCancelRequest,
 )
 from app.services.rental import RentalRuleError, RentalService
 from app.services.storage import PRESIGN_EXPIRY_SECONDS, StorageError, get_storage
@@ -133,20 +134,28 @@ def my_rentals(
 
 
 @router.get(
-    "/pending",
+    "",
     response_model=RentalListOut,
-    summary="Approval queue",
-    description="Staff only — pending requests ordered by requested start date.",
+    summary="Staff rental queue",
+    description=(
+        "Staff only. Lists requests in a single state, ordered by requested start "
+        "date. Defaults to `pending` (the approval queue), but `approved` and "
+        "`active` must be listable too — otherwise a rental approved once could "
+        "never be activated or completed, and the customer would stay blocked by "
+        "R1 indefinitely."
+    ),
 )
-def pending_queue(
+def staff_queue(
     db: SessionDep,
     _: StaffDep,
+    status: RentalStatus = Query(
+        default=RentalStatus.pending,
+        description="pending | approved | rejected | active | completed | cancelled",
+    ),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> RentalListOut:
-    items, total = RentalService(db).list_by_status(
-        RentalStatus.pending, page=page, page_size=page_size
-    )
+    items, total = RentalService(db).list_by_status(status, page=page, page_size=page_size)
     return RentalListOut(
         items=[RentalOut.model_validate(i) for i in items],
         total=total,
@@ -155,10 +164,31 @@ def pending_queue(
     )
 
 
-@router.post("/{rental_id}/cancel", response_model=RentalOut, summary="Cancel a pending request")
-def cancel_rental(rental_id: uuid.UUID, db: SessionDep, customer: CustomerDep) -> RentalRequest:
+@router.post(
+    "/{rental_id}/cancel",
+    response_model=RentalOut,
+    summary="Cancel a rental request",
+    description=(
+        "A customer may cancel their own request while it is still pending. "
+        "Staff may cancel a request that still holds a vehicle (pending, approved "
+        "or active), which is how a committed booking is released when the "
+        "customer drops out."
+    ),
+)
+def cancel_rental(
+    rental_id: uuid.UUID,
+    db: SessionDep,
+    actor: AnyUserDep,
+    body: StaffCancelRequest | None = Body(default=None),
+) -> RentalRequest:
+    """Cancel by customer (own, pending) or by staff (any non-terminal)."""
+    service = RentalService(db)
     try:
-        return RentalService(db).cancel_by_customer(rental_id, customer.id)
+        if actor.role is Role.staff:
+            return service.cancel_by_staff(
+                rental_id, actor.id, reason=body.reason if body else None
+            )
+        return service.cancel_by_customer(rental_id, actor.id)
     except RentalRuleError as exc:
         raise _raise_rule_error(exc) from exc
 

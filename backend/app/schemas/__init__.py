@@ -10,6 +10,7 @@ from app.schemas.rental import (
     RentalDetailOut,
     RentalListOut,
     RentalOut,
+    StaffCancelRequest,
     VehicleBrief,
 )
 from app.schemas.vehicle import (
@@ -29,6 +30,7 @@ __all__ = [
     "RentalDetailOut",
     "RentalListOut",
     "RentalOut",
+    "StaffCancelRequest",
     "Token",
     "UploadUrlRequest",
     "UploadUrlResponse",

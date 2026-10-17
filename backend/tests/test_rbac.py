@@ -54,7 +54,7 @@ def test_customer_cannot_create_vehicles(client: TestClient, auth) -> None:
 
 def test_customer_cannot_see_approval_queue(client: TestClient, auth) -> None:
     customer = auth["register_customer"]()
-    assert client.get("/api/v1/rentals/pending", headers=customer["headers"]).status_code == 403
+    assert client.get("/api/v1/rentals", headers=customer["headers"]).status_code == 403
 
 
 def test_staff_cannot_submit_rental_on_behalf_of_customer(

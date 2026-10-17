@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_serializer, model_validator
 
 # Business-rule windows from SPEC 1.4 (single source of truth for Pydantic).
 MIN_ADVANCE_DAYS = 14
@@ -75,6 +75,14 @@ class RejectRequest(BaseModel):
     reason: str = Field(..., min_length=1, max_length=1000)
 
 
+class StaffCancelRequest(BaseModel):
+    """Optional reason recorded on a staff-initiated cancellation."""
+
+    model_config = {"extra": "forbid"}
+
+    reason: str | None = Field(default=None, max_length=1000)
+
+
 class VehicleBrief(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -84,6 +92,11 @@ class VehicleBrief(BaseModel):
     year: int
     registration_no: str
     price_per_day: Decimal
+
+    @field_serializer("price_per_day")
+    def _serialize_price(self, value: Decimal) -> float:
+        """Match VehicleOut: money is a JSON number for the frontend."""
+        return float(value)
 
 
 class ProofOut(BaseModel):

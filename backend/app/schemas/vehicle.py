@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 VEHICLE_TYPES = ("car", "suv", "van", "truck", "bike")
 VEHICLE_STATUSES = ("available", "maintenance", "retired")
@@ -43,6 +43,8 @@ class VehicleStatusUpdate(BaseModel):
 
 
 class VehicleOut(BaseModel):
+    model_config = {"from_attributes": True}
+
     id: uuid.UUID
     type: str
     make: str
@@ -56,4 +58,12 @@ class VehicleOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    @field_serializer("price_per_day")
+    def _serialize_price(self, value: Decimal) -> float:
+        """Emit money as a JSON number, not Pydantic's default string.
+
+        JavaScript has no decimal type, so a quoted amount would contradict the
+        frontend's declared `number` and silently break any arithmetic done on
+        the price. The stored value keeps full Numeric(10, 2) precision.
+        """
+        return float(value)

@@ -196,6 +196,11 @@ class RentalService:
         return rental
 
     def cancel_by_customer(self, rental_id: uuid.UUID, customer_id: uuid.UUID) -> RentalRequest:
+        """Customer self-service cancellation.
+
+        Only their own pending request: once a rental is approved the vehicle is
+        committed, so releasing it becomes a staff action (see `cancel_by_staff`).
+        """
         rental = self._owned(rental_id, customer_id)
         if rental.status is not RentalStatus.pending:
             raise RentalRuleError("CANNOT_CANCEL", "Only a pending request can be cancelled.")
@@ -204,6 +209,26 @@ class RentalService:
             to=RentalStatus.cancelled,
             actor_id=customer_id,
             action=AuditAction.cancelled,
+        )
+
+    def cancel_by_staff(
+        self, rental_id: uuid.UUID, actor_id: uuid.UUID, reason: str | None = None
+    ) -> RentalRequest:
+        """Staff cancellation.
+
+        Permitted while the rental still holds a vehicle — pending, approved or
+        active — so a committed booking can be released when the customer drops
+        out. Terminal states (completed/rejected/cancelled) stay immutable.
+        """
+        rental = self._require_status(
+            rental_id, RentalStatus.pending, RentalStatus.approved, RentalStatus.active
+        )
+        return self._transition(
+            rental,
+            to=RentalStatus.cancelled,
+            actor_id=actor_id,
+            action=AuditAction.cancelled,
+            reason=reason,
         )
 
     def approve(self, rental_id: uuid.UUID, actor_id: uuid.UUID) -> RentalRequest:
@@ -263,11 +288,11 @@ class RentalService:
             raise RentalRuleError("FORBIDDEN", "You do not own this rental request.")
         return rental
 
-    def _require_status(self, rental_id: uuid.UUID, expected: RentalStatus) -> RentalRequest:
+    def _require_status(self, rental_id: uuid.UUID, *expected: RentalStatus) -> RentalRequest:
         rental = self.get(rental_id)
         if rental is None:
             raise RentalRuleError("NOT_FOUND", "Rental request not found.")
-        if rental.status is not expected:
+        if rental.status not in expected:
             raise RentalRuleError(
                 "INVALID_TRANSITION",
                 f"Cannot act on a request in state '{rental.status.value}'.",
