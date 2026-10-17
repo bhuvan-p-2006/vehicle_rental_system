@@ -80,10 +80,10 @@ Enforcement:
 - Re-upload allowed while `pending` only.
 
 ### 3.5 Staff Approval
-- `GET` pending queue sorted by submitted_at / start_date, paginated.
-- `GET` request detail: customer, vehicle, dates, proof view links, history.
+- Staff list requests per lifecycle state (`GET /rentals?status=...`, default `pending`). Every bucket must be reachable — a rental approved once would otherwise leave the queue and never be activatable or completable, leaving the customer blocked by R1 permanently.
 - `POST approve` / `POST reject {reason}` — reason required on reject.
-- `POST active / complete / cancel` transitions by staff.
+- `POST activate` / `POST complete` transitions by staff.
+- **Cancellation:** a customer may cancel only their own *pending* request. Staff may cancel any rental that still holds a vehicle (`pending`, `approved`, or `active`), which is how a committed booking is released when the customer drops out; the reason is recorded on the audit trail. Terminal states (`completed`, `rejected`, `cancelled`) are immutable — further transitions return `INVALID_TRANSITION`.
 - Customer sees status + reason on refresh; polling sufficient for v1.
 - Audit log: decision, actor, timestamp, previous→new state, reason.
 
@@ -138,9 +138,10 @@ Enforcement:
 - `POST /vehicles`, `PUT /vehicles/{id}`, `PATCH /vehicles/{id}/status` (staff)
 - `POST /rentals/upload-url` (presigned PUT; body: `kind`, `filename`, `content_type`, `size`, `draft_id`) (customer)
 - `POST /rentals` (customer) — body includes `proofs[]` of `{kind, object_key, content_type, size}`
-- `GET /rentals/me`, `POST /rentals/{id}/cancel` (customer)
+- `GET /rentals/me`, `POST /rentals/{id}/cancel` (customer: own + pending; staff: pending/approved/active)
 - `GET /rentals/{id}` (owner or staff), `GET /rentals/{id}/proofs` (presigned GET links, owner or staff)
-- `GET /rentals/pending` (staff queue), `POST /rentals/{id}/approve`, `POST /rentals/{id}/reject`, `POST /rentals/{id}/activate`, `POST /rentals/{id}/complete` (staff)
+- `GET /rentals` (staff queue; `status` query param, default `pending`) — every lifecycle bucket must be listable, otherwise a rental approved once could never be activated or completed and the customer would stay blocked by R1 indefinitely
+- `POST /rentals/{id}/approve`, `POST /rentals/{id}/reject`, `POST /rentals/{id}/activate`, `POST /rentals/{id}/complete` (staff)
 - `GET /health` (unversioned liveness probe used by the container healthcheck)
 - Errors are uniform: `{ "detail": { "code": "...", "message": "...", "errors": [...] } }`. Codes: `VALIDATION_ERROR`, `MISSING_TOKEN`, `INVALID_TOKEN`, `INVALID_CREDENTIALS`, `EMAIL_TAKEN`, `ROLE_REQUIRED`, `FORBIDDEN`, `NOT_YOUR_RENTAL`, `ACTIVE_RENTAL_EXISTS`, `VEHICLE_UNAVAILABLE`, `VEHICLE_NOT_FOUND`, `INVALID_TRANSITION`, `CANNOT_CANCEL`, `RENTAL_NOT_FOUND`, `STORAGE_UNAVAILABLE`.
 - 401 unauthenticated, 403 forbidden, 404 missing, 409 conflict (including business-rule conflicts), 422 schema/rule validation.
@@ -167,7 +168,7 @@ Enforcement:
 ## 10. Testing Strategy
 
 - Primary seam: **backend HTTP API** (confirmed). Tests assert status codes, shapes, transitions, RBAC — never internals.
-- Cases: RBAC matrix, date boundaries (13d reject / 14d accept, 14d duration accept / 15d reject), single-rental limit, overlap blocking, proofs-missing rejection, lifecycle + audit.
+- Cases: RBAC matrix, date boundaries (13d reject / 14d accept, 14d duration accept / 15d reject), single-rental limit, overlap blocking, proofs-missing rejection, lifecycle + audit, staff reachability of every lifecycle bucket, staff cancellation of a committed booking, catalog filtering and availability window, fleet CRUD, auth edge cases, and the JSON shape of money fields.
 - Greenfield: establish backend API test suite (`httpx` ASGI client against an ephemeral Postgres + stubbed object storage) as convention, run via `uv run pytest`. Frontend E2E deferred; Docker boot verified manually.
 - Tests must not require Docker to run locally: the suite provisions its own database and stubs the S3 client so `make test` works on a bare checkout (§13.4).
 
