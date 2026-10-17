@@ -5,6 +5,7 @@ import type {
   RentalRequest,
   RentalDetail,
   RentalListResponse,
+  RentalStatus,
   Token,
 } from '../types';
 import type {
@@ -88,8 +89,11 @@ export const rentalApi = {
   create: (data: RentalCreateBody) => api.post<RentalRequest>('/rentals', data),
   myRentals: (page = 1) => api.get<RentalListResponse>('/rentals/me', { params: { page } }),
   get: (id: string) => api.get<RentalDetail>(`/rentals/${id}`),
-  cancel: (id: string) => api.post<RentalRequest>(`/rentals/${id}/cancel`),
-  pending: (page = 1) => api.get<RentalListResponse>('/rentals/pending', { params: { page } }),
+  cancel: (id: string, reason?: string) =>
+    api.post<RentalRequest>(`/rentals/${id}/cancel`, reason ? { reason } : undefined),
+  /** Staff queue. Defaults to `pending`; `approved`/`active` are needed to advance the lifecycle. */
+  staffQueue: (status: RentalStatus = 'pending', page = 1) =>
+    api.get<RentalListResponse>('/rentals', { params: { status, page } }),
   approve: (id: string) => api.post<RentalDetail>(`/rentals/${id}/approve`),
   reject: (id: string, reason: string) =>
     api.post<RentalDetail>(`/rentals/${id}/reject`, { reason } satisfies RejectInput),

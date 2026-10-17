@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { vehicleApi } from '../services/api';
-import { vehicleCreateSchema, vehicleStatusSchema, type VehicleCreateInput, type VehicleStatusInput } from '../schemas';
+import { vehicleCreateSchema, vehicleStatusSchema, type VehicleCreateInput } from '../schemas';
 import type { Vehicle } from '../types';
 import toast from 'react-hot-toast';
 import { extractErrorMessage } from '../services/errors';
@@ -42,8 +42,15 @@ export default function VehicleManagementPage() {
   };
 
   const handleStatus = async (id: string, status: string) => {
+    // Mirror the server contract before sending (SPEC 3.6): the <select> value is
+    // an untrusted string.
+    const parsed = vehicleStatusSchema.safeParse({ status });
+    if (!parsed.success) {
+      toast.error(parsed.error.issues[0]?.message ?? 'Invalid status');
+      return;
+    }
     try {
-      await vehicleApi.updateStatus(id, status);
+      await vehicleApi.updateStatus(id, parsed.data.status);
       toast.success('Status updated');
       loadVehicles();
     } catch (err) { toast.error(extractErrorMessage(err)); }
